@@ -16,10 +16,8 @@ export function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [q, setQ] = useState("");
   
-  // Destructure 'logout' along with other states
   const { cartCount, theme, toggleTheme, user, products, logout } = useShop();
   
-  const path = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -71,23 +69,23 @@ export function Navbar() {
             <Heart className="h-4 w-4" />
           </Link>
 
-          {/* DYNAMIC ACCOUNT LINK WITH LOGOUT DROPDOWN */}
+          {/* UPDATED DYNAMIC ACCOUNT LINK */}
           <div className="group relative">
             <Link 
-              to={user ? "/" : "/login"} 
+              to={user ? "/account" : "/login"} 
               aria-label="Account" 
               className="flex items-center gap-2 rounded-full px-3 py-2 text-foreground/80 transition hover:bg-accent hover:text-foreground"
             >
               {user ? (
                 <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-gold">
-                  {user.email.split('@')[0]}
+                  {/* FIX: Now checks for user.name first */}
+                  {user.name || user.email.split('@')[0]}
                 </span>
               ) : (
                 <User className="h-4 w-4" />
               )}
             </Link>
 
-            {/* Logout Tooltip - Only visible on hover when user is logged in */}
             {user && (
               <div className="invisible absolute right-0 top-full pt-2 opacity-0 transition-all group-hover:visible group-hover:opacity-100">
                 <div className="min-w-[120px] overflow-hidden rounded-xl border border-border/50 bg-background/95 p-1 shadow-xl backdrop-blur-md">
@@ -126,7 +124,7 @@ export function Navbar() {
         </div>
       </nav>
 
-      {/* Search Overlay Code remains the same... */}
+      {/* Search Overlay */}
       <AnimatePresence>
         {searchOpen && (
           <motion.div
@@ -171,7 +169,7 @@ export function Navbar() {
         )}
       </AnimatePresence>
 
-      {/* Mobile Menu Code (with Logout added) */}
+      {/* Mobile Menu */}
       <AnimatePresence>
         {menuOpen && (
           <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ duration: 0.4, ease: [0.2,0.8,0.2,1] }} className="fixed inset-0 z-50 bg-background md:hidden">
@@ -186,7 +184,7 @@ export function Navbar() {
                 </li>
               ))}
               <li>
-                <Link to={user ? "/" : "/login"} onClick={() => setMenuOpen(false)} className="block py-3 font-display text-3xl">
+                <Link to={user ? "/account" : "/login"} onClick={() => setMenuOpen(false)} className="block py-3 font-display text-3xl">
                   {user ? "Profile" : "Sign In"}
                 </Link>
               </li>

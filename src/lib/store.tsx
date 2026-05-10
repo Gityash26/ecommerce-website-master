@@ -8,14 +8,14 @@ type ShopState = {
   products: Product[]; 
   cart: CartItem[];
   wishlist: number[];
-  user: { email: string } | null;
+  user: { email: string; name?: string } | null;
   theme: "light" | "dark";
   addToCart: (p: Product, opts?: { size?: string; color?: string; qty?: number }) => void;
   updateQty: (id: number, qty: number) => void;
   removeFromCart: (id: number) => void;
   clearCart: () => void;
   toggleWishlist: (id: number) => void;
-  setUser: (u: { email: string } | null) => void;
+  setUser: (u: { email: string; name?: string } | null) => void;
   logout: () => Promise<void>;
   placeOrder: () => Promise<{ success?: boolean; error?: string }>;
   toggleTheme: () => void;
@@ -35,7 +35,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [wishlist, setWishlist] = useState<number[]>([]);
-  const [user, setUser] = useState<{ email: string } | null>(null);
+  const [user, setUser] = useState<{ email: string; name?: string } | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [hydrated, setHydrated] = useState(false);
 
@@ -54,7 +54,30 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     getProducts();
   }, []);
 
-  // 2. Hydration
+  // 2. Fetch/Sync User Profile Name
+  useEffect(() => {
+    async function syncUserProfile() {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      
+      if (authUser) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("first_name")
+          .eq("id", authUser.id)
+          .single();
+
+        setUser({
+          email: authUser.email!,
+          name: profileData?.first_name || authUser.email!.split('@')[0]
+        });
+      }
+    }
+    
+    // Only run sync if we are hydrated to avoid overwriting local storage immediately
+    if (hydrated) syncUserProfile();
+  }, [hydrated]);
+
+  // 3. Hydration from LocalStorage
   useEffect(() => {
     setCart(read("cart", []));
     setWishlist(read("wishlist", []));
@@ -65,7 +88,7 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     setHydrated(true);
   }, []);
 
-  // 3. Sync to LocalStorage
+  // 4. Sync to LocalStorage
   useEffect(() => { if (hydrated) localStorage.setItem("cart", JSON.stringify(cart)); }, [cart, hydrated]);
   useEffect(() => { if (hydrated) localStorage.setItem("wishlist", JSON.stringify(wishlist)); }, [wishlist, hydrated]);
   useEffect(() => { if (hydrated) localStorage.setItem("user", JSON.stringify(user)); }, [user, hydrated]);
@@ -81,18 +104,15 @@ export function ShopProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("user");
   };
 
-  // --- CALCULATE TOTALS FIRST ---
   const subtotalValue = cart.reduce((n, x) => n + x.product.price * x.qty, 0);
   const cartCountValue = cart.reduce((n, x) => n + x.qty, 0);
 
-  // --- PLACE ORDER LOGIC ---
   const placeOrder = async () => {
     if (!user || cart.length === 0) return { error: "Login required or cart empty" };
 
     const { data: { user: authUser } } = await supabase.auth.getUser();
     if (!authUser) return { error: "Session expired" };
 
-    // Use subtotalValue calculated above
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .insert([{ user_id: authUser.id, total_amount: subtotalValue }])
