@@ -1,19 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState } from "react";
-import { CreditCard, Smartphone, Wallet, Check, Lock, Loader2, MapPin, Search, Navigation } from "lucide-react";
+import { useState, useEffect, lazy, Suspense } from "react";
+import { Smartphone, Wallet, Check, Lock, Loader2, Navigation, ShoppingBag, X } from "lucide-react";
 import { useShop, formatPrice } from "@/lib/store";
+import { QRCodeSVG } from "qrcode.react";
 
-// Map Imports - Ensure you add Leaflet CSS to your index.html
-import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-
-// Fix for Leaflet default marker icons in React
-import icon from 'leaflet/dist/images/marker-icon.png';
-import iconShadow from 'leaflet/dist/images/marker-shadow.png';
-let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25,41], iconAnchor: [12,41] });
-L.Marker.prototype.options.icon = DefaultIcon;
+const MapInterface = lazy(() => import("@/components/shop/MapInterface"));
 
 export const Route = createFileRoute("/checkout")({
   head: () => ({ meta: [{ title: "Checkout — Maison Or" }] }),
@@ -21,209 +13,195 @@ export const Route = createFileRoute("/checkout")({
 });
 
 const METHODS = [
-  { id: "card", label: "Credit Card", Icon: CreditCard },
-  { id: "upi", label: "UPI", Icon: Smartphone },
-  { id: "wallet", label: "Wallet", Icon: Wallet },
+  { id: "upi", label: "UPI Pay", Icon: Smartphone, description: "Scan to Pay Instantly" },
+  { id: "cod", label: "Cash on Delivery", Icon: Wallet, description: "Pay when you receive" },
 ];
 
 function Checkout() {
   const { cart, subtotal, placeOrder, user } = useShop();
   const navigate = useNavigate();
-  
-  // --- FORM STATE ---
+
   const [formData, setFormData] = useState({
-    firstName: "", lastName: "", email: user?.email || "",
-    address: "", city: "", postalCode: "", country: "India"
+    firstName: user?.name?.split(" ")[0] || "Guest",
+    lastName: user?.name?.split(" ").slice(1).join(" ") || "",
+    email: user?.email || "",
+    address: "",
+    city: "",
+    postalCode: "",
   });
-  const [method, setMethod] = useState("card");
-  const [success, setSuccess] = useState(false);
+
+  const [method, setMethod] = useState("upi");
+  const [isBrowser, setIsBrowser] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [mapPos, setMapPos] = useState<[number, number]>([28.6139, 77.2090]);
 
-  // --- MAP & LOCATION STATE ---
-  const [mapPos, setMapPos] = useState<[number, number]>([28.6139, 77.2090]); // Default: Delhi
-  const [mapOpen, setMapOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  useEffect(() => {
+    setIsBrowser(true);
+  }, []);
 
-  const tax = subtotal * 0.08;
-  const shipping = subtotal > 200 ? 0 : 25;
-  const total = subtotal + tax + shipping;
+  const total = subtotal + subtotal * 0.08 + (subtotal > 200 ? 0 : 25);
 
-  // Helper: Reverse Geocode Lat/Lng to Address
-  const fetchAddressFromCoords = async (lat: number, lon: number) => {
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
-      const data = await res.json();
-      if (data.address) {
-        setFormData(prev => ({
-          ...prev,
-          address: data.display_name,
-          city: data.address.city || data.address.town || data.address.village || "",
-          postalCode: data.address.postcode || ""
-        }));
-      }
-    } catch (err) { console.error("Geocoding failed", err); }
-  };
-
-  // Action: Get Current Device Location
-  const handleGeoLocation = () => {
-    if (!navigator.geolocation) return alert("Geolocation not supported by browser.");
+  const handleAutoLocate = () => {
+    if (!navigator.geolocation) return alert("Geolocation not supported");
     navigator.geolocation.getCurrentPosition(async (pos) => {
       const { latitude, longitude } = pos.coords;
       setMapPos([latitude, longitude]);
-      setMapOpen(true);
-      await fetchAddressFromCoords(latitude, longitude);
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&addressdetails=1`);
+        const data: any = await res.json();
+        const addr = data.address;
+        setFormData((prev) => ({
+          ...prev,
+          address: [addr.road, addr.suburb, addr.neighbourhood].filter(Boolean).join(", ") || data.display_name.split(",").slice(0, 2).join(", "),
+          city: addr.city || addr.town || addr.village || "",
+          postalCode: addr.postcode || "",
+        }));
+      } catch (e) { console.error(e); }
     });
   };
 
-  // Action: Search Address on Map
-  const handleMapSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery) return;
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${searchQuery}`);
-      const data = await res.json();
-      if (data.length > 0) {
-        const { lat, lon } = data[0];
-        setMapPos([parseFloat(lat), parseFloat(lon)]);
-        setMapOpen(true);
-        await fetchAddressFromCoords(parseFloat(lat), parseFloat(lon));
-      }
-    } catch (err) { alert("Location not found."); }
-  };
-
-  // Map Component: Update view when pos changes
-  function MapUpdater({ center }: { center: [number, number] }) {
-    const map = useMap();
-    map.setView(center, 16);
-    return null;
-  }
-
-  // Map Component: Handle manual clicks
-  function MapEvents() {
-    useMapEvents({
-      click(e) {
-        setMapPos([e.latlng.lat, e.latlng.lng]);
-        fetchAddressFromCoords(e.latlng.lat, e.latlng.lng);
-      },
-    });
-    return <Marker position={mapPos} />;
-  }
-
-  const handlePay = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handlePay = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!user) return navigate({ to: "/login" });
+    if (!formData.address) return alert("Please select a delivery location.");
+
+    // Trigger QR Modal if UPI is selected and not already shown
+    if (method === 'upi' && !showQR) {
+      setShowQR(true);
+      return;
+    }
+
     setIsProcessing(true);
+    // Matching store.tsx signature (0 arguments)
     const result = await placeOrder();
-    if (result.success) setSuccess(true);
+
+    if (result.success) {
+      setShowQR(false);
+      setSuccess(true);
+      setTimeout(() => navigate({ to: "/" }), 5000);
+    } else {
+      alert(result.error || "Order failed.");
+    }
     setIsProcessing(false);
   };
 
   if (cart.length === 0 && !success) return <EmptyBag />;
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-16 lg:px-10 lg:py-24">
-      <h1 className="font-display text-5xl font-light sm:text-6xl">Checkout</h1>
+    <div className="mx-auto max-w-7xl px-6 py-16 lg:px-10 lg:py-24 font-sans">
+      <h1 className="font-display text-5xl font-light sm:text-6xl text-foreground mb-12">Checkout</h1>
 
-      <div className="mt-12 grid gap-12 lg:grid-cols-[1fr_400px]">
+      <div className="grid gap-12 lg:grid-cols-[1fr_400px]">
         <form onSubmit={handlePay} className="space-y-12">
           
+          <section className="opacity-80">
+            <h2 className="font-display text-2xl text-foreground mb-6 underline decoration-gold/30 underline-offset-8">Contact Info</h2>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Full Name" value={`${formData.firstName} ${formData.lastName}`} readOnly className="bg-muted/10 cursor-not-allowed" />
+              <Field label="Email Address" value={formData.email} readOnly className="bg-muted/10 cursor-not-allowed" />
+            </div>
+          </section>
+
           <section>
-            <div className="flex items-center justify-between">
-              <h2 className="font-display text-2xl">Shipping address</h2>
-              <button 
-                type="button" 
-                onClick={handleGeoLocation}
-                className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-gold hover:opacity-70 transition"
-              >
-                <Navigation className="h-3 w-3" /> Detect Location
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="font-display text-2xl text-foreground">Delivery Address</h2>
+              <button type="button" onClick={handleAutoLocate} className="flex items-center gap-2 rounded-full border border-gold/30 bg-gold/5 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gold hover:bg-gold hover:text-white transition-all shadow-lg">
+                <Navigation className="h-3 w-3" /> Auto-Locate
               </button>
             </div>
 
-            {/* Address Fields */}
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              <Field label="First name" value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} />
-              <Field label="Last name" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} />
-              <Field label="Address" className="sm:col-span-2" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
-              <Field label="City" value={formData.city} onChange={e => setFormData({...formData, city: e.target.value})} />
-              <Field label="Postal code" value={formData.postalCode} onChange={e => setFormData({...formData, postalCode: e.target.value})} />
+            <div className="grid gap-4 sm:grid-cols-2 mb-8">
+              <Field label="Full Address" value={formData.address} className="sm:col-span-2" onChange={(e: any) => setFormData({ ...formData, address: e.target.value })} />
+              <Field label="City" value={formData.city} readOnly className="bg-muted/5" />
+              <Field label="Postal Code" value={formData.postalCode} readOnly className="bg-muted/5" />
             </div>
 
-            {/* Interactive Map Interface */}
-            <div className="mt-8 overflow-hidden rounded-2xl border border-border bg-muted/30">
-              <div className="flex items-center gap-2 bg-background p-3 border-b border-border">
-                <Search className="h-4 w-4 text-muted-foreground" />
-                <input 
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleMapSearch(e)}
-                  placeholder="Search for a building or street..." 
-                  className="flex-1 bg-transparent text-xs outline-none"
-                />
-                <button type="button" onClick={handleMapSearch} className="text-[10px] font-bold uppercase tracking-widest px-3">Find</button>
-              </div>
-              
-              <div className="h-[300px] w-full z-0 cursor-crosshair">
-                <MapContainer center={mapPos} zoom={13} style={{ height: "100%", width: "100%" }}>
-                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                  <MapUpdater center={mapPos} />
-                  <MapEvents />
-                </MapContainer>
-              </div>
-              <div className="bg-background p-2 text-center border-t border-border">
-                <p className="text-[9px] uppercase tracking-widest text-muted-foreground">Click the map to adjust exact pin location</p>
-              </div>
+            <div className="h-[450px] rounded-[2.5rem] border border-border/40 overflow-hidden bg-[#121212] relative shadow-2xl ring-1 ring-white/5">
+              {isBrowser ? (
+                <Suspense fallback={<div className="flex h-full items-center justify-center text-[10px] uppercase animate-pulse text-muted-foreground">Loading Satellite Data...</div>}>
+                  <MapInterface pos={mapPos} setPos={setMapPos} onAddressSelect={(data) => setFormData((prev) => ({ ...prev, ...data }))} />
+                </Suspense>
+              ) : <div className="h-full w-full bg-[#121212]" />}
             </div>
           </section>
 
-          {/* Payment Section */}
           <section>
-            <h2 className="font-display text-2xl">Payment</h2>
-            <div className="mt-6 grid grid-cols-3 gap-3">
+            <h2 className="font-display text-2xl mb-6">Payment Choice</h2>
+            <div className="grid gap-4 sm:grid-cols-2">
               {METHODS.map((m) => (
-                <button type="button" key={m.id} onClick={() => setMethod(m.id)} className={`flex flex-col items-center gap-2 rounded-xl border p-4 transition ${method === m.id ? "border-foreground bg-foreground/5" : "border-border hover:border-foreground/40"}`}>
-                  <m.Icon className="h-5 w-5" /><span className="text-xs font-medium">{m.label}</span>
+                <button key={m.id} type="button" onClick={() => setMethod(m.id)} className={`flex items-start gap-4 rounded-2xl border p-5 transition-all text-left ${method === m.id ? "border-gold bg-gold/5 ring-1 ring-gold" : "border-border hover:border-gold/30"}`}>
+                  <div className={`p-2 rounded-lg ${method === m.id ? "bg-gold text-white" : "bg-muted text-muted-foreground"}`}><m.Icon className="h-5 w-5" /></div>
+                  <div>
+                    <p className="text-sm font-bold text-foreground">{m.label}</p>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-widest">{m.description}</p>
+                  </div>
                 </button>
               ))}
             </div>
-            {/* Payment Details Form (Hidden for brevity, same as your original) */}
           </section>
 
-          <button 
-            type="submit" 
-            disabled={isProcessing}
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-gold px-7 py-4 text-sm font-medium text-gold-foreground shadow-gold transition hover:scale-[1.01] disabled:opacity-70"
-          >
-            {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-            {isProcessing ? "Finalizing Order..." : `Complete Purchase — ${formatPrice(total)}`}
+          <button type="submit" disabled={isProcessing} className="group w-full bg-foreground text-background py-6 rounded-full font-bold shadow-elegant hover:scale-[1.01] transition-all disabled:opacity-50 flex items-center justify-center gap-3">
+            {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : <><Lock className="h-4 w-4" /><span className="uppercase tracking-[0.2em] text-[11px]">{method === "upi" ? "Generate UPI QR" : "Place COD Order"} — {formatPrice(total)}</span></>}
           </button>
         </form>
 
-        <aside className="h-fit rounded-2xl border border-border bg-card p-8 shadow-soft lg:sticky lg:top-28">
-           {/* Summary Section (Same as your original) */}
+        <aside className="h-fit rounded-3xl border border-border/40 bg-card/50 p-8 shadow-soft backdrop-blur-xl lg:sticky lg:top-28">
+          <h3 className="font-display text-2xl mb-6 text-foreground">Bag Summary</h3>
+          <ul className="space-y-4 mb-6">
+            {cart.map((it) => (
+              <li key={it.product.id} className="flex gap-3 text-sm">
+                <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-muted">
+                  <img src={it.product.image} alt="" className="h-full w-full object-cover" />
+                  <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-foreground text-[10px] text-background font-bold">{it.qty}</span>
+                </div>
+                <div className="flex-1 font-medium text-foreground">{it.product.title}</div>
+                <div className="tabular-nums font-medium text-foreground">{formatPrice(it.product.price * it.qty)}</div>
+              </li>
+            ))}
+          </ul>
+          <div className="border-t border-border/40 pt-4 flex justify-between font-medium text-xl text-foreground"><span className="font-display">Total Due</span><span>{formatPrice(total)}</span></div>
         </aside>
       </div>
+
+      {/* UPI QR MODAL */}
+      <AnimatePresence>
+        {showQR && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[110] flex items-center justify-center bg-background/80 backdrop-blur-md p-6">
+            <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} className="bg-card border border-border p-8 rounded-[2.5rem] max-w-sm w-full text-center shadow-2xl relative">
+              <button onClick={() => setShowQR(false)} className="absolute top-6 right-6 text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
+              <div className="mb-6 flex justify-center mt-4">
+                <div className="p-4 bg-white rounded-3xl"><QRCodeSVG value={`upi://pay?pa=maisonor@bank&pn=MaisonOr&am=${total}&cu=INR`} size={180} level="H" /></div>
+              </div>
+              <h3 className="font-display text-2xl mb-2 text-foreground font-light">Scan to Pay</h3>
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-8">Secure payment via UPI Intent</p>
+              <button onClick={() => handlePay()} className="w-full bg-gold text-white py-4 rounded-full font-bold text-xs uppercase tracking-widest hover:scale-105 transition-transform">I Have Paid</button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <SuccessOverlay visible={success} />
     </div>
   );
 }
 
-// --- SUB-COMPONENTS ---
-
-function Field({ label, className, ...rest }: { label: string; className?: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+function Field({ label, className, ...rest }: any) {
   return (
     <label className={`block ${className ?? ""}`}>
-      <span className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</span>
-      <input {...rest} required className="mt-2 w-full rounded-lg border border-border bg-background px-4 py-3 text-sm outline-none transition focus:border-gold focus:ring-2 focus:ring-gold/20" />
+      <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground ml-1 mb-2 block">{label}</span>
+      <input {...rest} className="w-full rounded-xl border border-border bg-background/50 px-5 py-4 text-sm outline-none focus:border-gold transition-all text-foreground" />
     </label>
   );
 }
 
 function EmptyBag() {
   return (
-    <div className="mx-auto max-w-xl px-6 py-32 text-center">
-      <h1 className="font-display text-4xl">Your bag is empty</h1>
-      <Link to="/shop" className="story-link mt-6 inline-block">Browse the collection</Link>
+    <div className="mx-auto max-w-xl px-6 py-40 text-center">
+      <ShoppingBag className="h-12 w-12 mx-auto text-muted mb-6" />
+      <h1 className="font-display text-4xl mb-4 text-foreground">Your bag is empty</h1>
+      <Link to="/shop" className="text-gold uppercase text-xs font-bold tracking-widest hover:underline">Return to Collection</Link>
     </div>
   );
 }
@@ -231,8 +209,14 @@ function EmptyBag() {
 function SuccessOverlay({ visible }: { visible: boolean }) {
   if (!visible) return null;
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[60] flex items-center justify-center bg-background/95 backdrop-blur-md p-6">
-      {/* ... Animated Success Content ... */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[120] flex items-center justify-center bg-background/95 backdrop-blur-xl p-6 text-center">
+      <div className="max-w-md">
+        <div className="mx-auto h-24 w-24 rounded-full bg-gold shadow-gold flex items-center justify-center mb-8 animate-bounce">
+          <Check className="h-12 w-12 text-white" />
+        </div>
+        <h2 className="font-display text-5xl mb-4 text-foreground font-light italic">Exquisite choice.</h2>
+        <p className="text-muted-foreground text-[10px] uppercase tracking-widest">Order placed successfully. Returning home in a moment...</p>
+      </div>
     </motion.div>
   );
 }
