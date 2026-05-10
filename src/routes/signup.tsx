@@ -1,14 +1,21 @@
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useState, useRef, forwardRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useShop } from "@/lib/store";
 import { motion, AnimatePresence } from "framer-motion";
+import React from "react";
 
 export const Route = createFileRoute("/signup")({
   component: SignUp,
 });
 
-// Helper for password validation logic
+// --- TYPES ---
+interface SignFieldProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  label: string;
+  className?: string;
+}
+
+// --- HELPERS ---
 const validatePassword = (pw: string) => ({
   hasUpper: /[A-Z]/.test(pw),
   hasLower: /[a-z]/.test(pw),
@@ -33,64 +40,82 @@ function SignUp() {
   const { setUser } = useShop();
   const navigate = useNavigate();
 
-  // Real-time validation checks
+  // --- REFS FOR KEYBOARD NAVIGATION ---
+  const firstRef = useRef<HTMLInputElement>(null);
+  const lastRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
+
   const checks = validatePassword(formData.password);
   const isPasswordValid = Object.values(checks).every(Boolean);
+
+  // FIXED: Added | null to the RefObject type to satisfy TypeScript
+  const handleKeyPress = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    nextRef: React.RefObject<HTMLInputElement | null> | null
+  ) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (nextRef && nextRef.current) {
+        nextRef.current.focus();
+      } else if (isPasswordValid) {
+        handleInitialSignUp(e as any);
+      }
+    }
+  };
 
   const handleInitialSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
-    // 1. Check if phone number already exists in profiles table
-    const { data: existingPhone } = await supabase
-      .from("profiles")
-      .select("phone_number")
-      .eq("phone_number", formData.phone)
-      .single();
+    try {
+      const { data: existingPhone } = await supabase
+        .from("profiles")
+        .select("phone_number")
+        .eq("phone_number", formData.phone)
+        .maybeSingle();
 
-    if (existingPhone) {
-      alert("This phone number is already registered.");
-      setLoading(false);
-      return;
-    }
+      if (existingPhone) {
+        alert("This phone number is already registered.");
+        setLoading(false);
+        return;
+      }
 
-    // 2. Create Auth Account with Metadata
-    const { data, error: authError } = await supabase.auth.signUp({
-      email: formData.email,
-      password: formData.password,
-      options: {
-        data: {
-          first_name: formData.firstName,
-          last_name: formData.lastName,
-          phone: formData.phone,
+      const { data, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            first_name: formData.firstName,
+            last_name: formData.lastName,
+            phone: formData.phone,
+          },
         },
-      },
-    });
+      });
 
-    if (authError) {
-      alert(authError.message);
+      if (authError) {
+        alert(authError.message);
+        setLoading(false);
+        return;
+      }
+
+      if (data?.session) {
+        setUser({ email: data.user?.email!, name: formData.firstName });
+        navigate({ to: "/account" });
+      } else {
+        setStep("otp");
+      }
+    } catch (err) {
+      alert("Registration failed.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    // 3. Logic for "Instant Login" (Confirm Email OFF) vs "OTP" (Confirm Email ON)
-    if (data?.session) {
-      // If session exists immediately, user is auto-confirmed/logged in
-      setUser({ email: data.user?.email! });
-      navigate({ to: "/account" });
-    } else {
-      // Otherwise, proceed to OTP verification step
-      setStep("otp");
-      alert("A verification code has been sent to your email.");
-    }
-
-    setLoading(false);
   };
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
     const { data, error } = await supabase.auth.verifyOtp({
       email: formData.email,
       token: otp,
@@ -104,11 +129,7 @@ function SignUp() {
     }
 
     if (data.user) {
-      // PASS BOTH EMAIL AND NAME HERE
-      setUser({
-        email: data.user.email!,
-        name: formData.firstName, // This makes the name appear in Navbar instantly
-      });
+      setUser({ email: data.user.email!, name: formData.firstName });
       navigate({ to: "/account" });
     }
     setLoading(false);
@@ -118,153 +139,87 @@ function SignUp() {
     <div className="mx-auto max-w-2xl px-6 py-24">
       <AnimatePresence mode="wait">
         {step === "details" ? (
-          <motion.div
-            key="details"
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 20 }}
-          >
-            <h1 className="font-display text-4xl mb-2">Join Maison Or</h1>
-            <p className="text-muted-foreground text-sm mb-10">
-              Create an account to manage your collection.
-            </p>
+          <motion.div key="details" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
+            <h1 className="font-display text-5xl mb-4 italic">Join Maison Or.</h1>
+            <p className="text-muted-foreground text-[11px] uppercase tracking-[0.3em] mb-12">Membership grants access to our exclusive collections.</p>
 
-            <form
-              onSubmit={handleInitialSignUp}
-              className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6"
-            >
-              <div>
-                <label className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  First Name
-                </label>
-                <input
-                  required
-                  type="text"
-                  value={formData.firstName}
-                  onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                  className="w-full border-b border-border py-2 outline-none focus:border-gold bg-transparent"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  Last Name
-                </label>
-                <input
-                  required
-                  type="text"
-                  value={formData.lastName}
-                  onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                  className="w-full border-b border-border py-2 outline-none focus:border-gold bg-transparent"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  Email Address
-                </label>
-                <input
-                  required
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full border-b border-border py-2 outline-none focus:border-gold bg-transparent"
-                />
-              </div>
-              <div className="md:col-span-1">
-                <label className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  Phone Number
-                </label>
-                <input
-                  required
-                  type="tel"
-                  pattern="[0-9]{10}"
-                  placeholder="10 Digit Number"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="w-full border-b border-border py-2 outline-none focus:border-gold bg-transparent"
-                />
-              </div>
+            <form onSubmit={handleInitialSignUp} className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8">
+              <SignField 
+                ref={firstRef} 
+                label="First Name" 
+                value={formData.firstName} 
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value })} 
+                onKeyDown={(e) => handleKeyPress(e, lastRef)}
+              />
+              <SignField 
+                ref={lastRef} 
+                label="Last Name" 
+                value={formData.lastName} 
+                onChange={(e) => setFormData({ ...formData, lastName: e.target.value })} 
+                onKeyDown={(e) => handleKeyPress(e, emailRef)}
+              />
+              <SignField 
+                ref={emailRef} 
+                label="Email" 
+                type="email" 
+                className="md:col-span-2" 
+                value={formData.email} 
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })} 
+                onKeyDown={(e) => handleKeyPress(e, phoneRef)}
+              />
+              <SignField 
+                ref={phoneRef} 
+                label="Phone Number" 
+                type="tel" 
+                maxLength={10} 
+                value={formData.phone} 
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })} 
+                onKeyDown={(e) => handleKeyPress(e, passRef)}
+              />
+              
               <div className="md:col-span-1 relative">
-                <label className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  Password
-                </label>
+                <label className="text-[10px] uppercase tracking-widest text-muted-foreground ml-1">Password</label>
                 <input
+                  ref={passRef}
                   required
                   type="password"
                   value={formData.password}
                   onFocus={() => setPasswordFocused(true)}
                   onBlur={() => setTimeout(() => setPasswordFocused(false), 200)}
                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full border-b border-border py-2 outline-none focus:border-gold bg-transparent"
+                  onKeyDown={(e) => handleKeyPress(e, null)}
+                  className="w-full border-b border-border py-3 outline-none focus:border-gold bg-transparent transition-all"
                 />
-
                 <AnimatePresence>
                   {passwordFocused && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute z-10 top-full mt-4 w-full bg-background/95 backdrop-blur-md border border-border p-4 rounded-xl shadow-xl"
-                    >
-                      <p className="text-[9px] uppercase tracking-widest text-muted-foreground mb-3">
-                        Security Requirements
-                      </p>
-                      <div className="grid grid-cols-1 gap-2">
-                        <RequirementItem label="Uppercase Letter" met={checks.hasUpper} />
-                        <RequirementItem label="Lowercase Letter" met={checks.hasLower} />
-                        <RequirementItem label="Numerical Digit" met={checks.hasDigit} />
-                        <RequirementItem label="Special Character" met={checks.hasSpecial} />
-                        <RequirementItem label="At least 8 characters" met={checks.isLong} />
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute z-20 top-full mt-4 w-full bg-card/95 backdrop-blur-md border border-border p-6 rounded-2xl shadow-2xl">
+                      <div className="space-y-2">
+                        <RequirementItem label="Uppercase" met={checks.hasUpper} />
+                        <RequirementItem label="Lowercase" met={checks.hasLower} />
+                        <RequirementItem label="Numerical" met={checks.hasDigit} />
+                        <RequirementItem label="Special" met={checks.hasSpecial} />
+                        <RequirementItem label="8+ Characters" met={checks.isLong} />
                       </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
               </div>
 
-              <div className="md:col-span-2 mt-6">
-                <button
-                  disabled={loading || !isPasswordValid}
-                  className="w-full bg-foreground text-background py-4 rounded-full hover:opacity-90 transition shadow-elegant disabled:opacity-20 disabled:cursor-not-allowed"
-                >
-                  {loading ? "Processing..." : "Register"}
+              <div className="md:col-span-2 mt-12">
+                <button disabled={loading || !isPasswordValid} className="w-full bg-foreground text-background py-5 rounded-full font-bold uppercase tracking-[0.3em] text-[10px] shadow-elegant hover:scale-[1.01] transition-all disabled:opacity-20">
+                  {loading ? "Registering..." : "Create Account"}
                 </button>
               </div>
             </form>
           </motion.div>
         ) : (
           <motion.div key="otp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
-            <h1 className="font-display text-4xl mb-2">Verify Email</h1>
-            <p className="text-muted-foreground text-sm mb-10">
-              Enter the 6-digit code sent to {formData.email}.
-            </p>
-
-            <form onSubmit={handleVerifyOtp} className="space-y-6">
-              <div>
-                <label className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  OTP Code
-                </label>
-                <input
-                  required
-                  type="text"
-                  maxLength={6}
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  className="w-full border-b border-border py-2 text-center text-2xl tracking-[1em] outline-none focus:border-gold bg-transparent"
-                />
-              </div>
-              <button
-                disabled={loading}
-                className="w-full bg-gold text-white py-4 rounded-full hover:opacity-90 transition shadow-elegant"
-              >
-                {loading ? "Verifying..." : "Verify & Complete Signup"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setStep("details")}
-                className="w-full text-xs text-muted-foreground uppercase tracking-widest hover:text-foreground"
-              >
-                Back to Details
-              </button>
-            </form>
+             <h1 className="font-display text-4xl mb-2 italic">Verify Email.</h1>
+             <p className="text-muted-foreground text-sm mb-10">Verification code sent to {formData.email}</p>
+             <form onSubmit={handleVerifyOtp} className="space-y-10">
+                <input required type="text" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value)} className="w-full border-b border-border py-4 text-center text-4xl tracking-[1em] outline-none focus:border-gold bg-transparent" />
+                <button disabled={loading} className="w-full bg-gold text-white py-5 rounded-full uppercase tracking-widest text-xs font-bold shadow-gold">Enter the Maison</button>
+             </form>
           </motion.div>
         )}
       </AnimatePresence>
@@ -272,17 +227,24 @@ function SignUp() {
   );
 }
 
+const SignField = forwardRef<HTMLInputElement, SignFieldProps>(({ label, className, ...rest }, ref) => (
+  <div className={className}>
+    <label className="text-[10px] uppercase tracking-widest text-muted-foreground ml-1">{label}</label>
+    <input
+      ref={ref}
+      required
+      className="w-full border-b border-border py-3 outline-none focus:border-gold bg-transparent transition-all"
+      {...rest}
+    />
+  </div>
+));
+SignField.displayName = "SignField";
+
 function RequirementItem({ label, met }: { label: string; met: boolean }) {
   return (
-    <div className="flex items-center gap-2">
-      <div
-        className={`h-1.5 w-1.5 rounded-full transition-colors duration-500 ${met ? "bg-gold shadow-[0_0_8px_#D4AF37]" : "bg-border"}`}
-      />
-      <span
-        className={`text-[10px] tracking-wide transition-colors ${met ? "text-foreground font-medium" : "text-muted-foreground"}`}
-      >
-        {label}
-      </span>
+    <div className="flex items-center gap-3">
+      <div className={`h-1.5 w-1.5 rounded-full transition-all duration-500 ${met ? "bg-gold shadow-[0_0_8px_#D4AF37]" : "bg-border"}`} />
+      <span className={`text-[10px] uppercase tracking-widest ${met ? "text-foreground font-bold" : "text-muted-foreground"}`}>{label}</span>
     </div>
   );
 }
